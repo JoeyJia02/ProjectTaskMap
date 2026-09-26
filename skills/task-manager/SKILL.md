@@ -1,0 +1,57 @@
+---
+name: task-manager
+description: 在使用 Project Task Map 管理单个 ChatGPT Project 时，依据当前对话增量维护任务树、焦点、决策与 Parking Lot，并在刷新时核对遗漏的进展。适用于更新项目地图、恢复进度或“输出我们任务概况目前进度，并更新 TaskBoardApp”。
+---
+
+# Task Manager
+
+维护可追溯的项目状态；后端是事实源，本 Skill 是语义判断和调用策略。只有用户已选择这个项目管理流程时才维护地图，不把普通问答自动扩展为项目管理。
+
+## 绑定与读取
+
+- 使用 Project instructions 中的 `Task Map bindingKey` 调用 `bind_project`，重用返回的 `projectId`。绑定键是项目定位符，不是密码；不存放 owner secret、OAuth token 或 UI projectToken。
+- 名称不是身份。改名、重连和新对话继续使用原 bindingKey；不同 Project 使用不同键。键缺失时请用户提供已有键或明确创建新绑定，不按同名猜测项目。
+- 没有已验证的宿主 Project ID 时省略 `hostProjectId`，不编造它。匿名会话标识也不是 Project ID。
+- 开始更新前用 `get_project_map` 读取已有 IDs、版本、状态、依据和人工保护；所有变更针对这些稳定 IDs。工具不可用时说明尚未写入，保留提案供后续重试。
+
+## Level A：逐轮增量判断
+
+每次收到与项目相关的新事实，将其与最近读取的状态比较。读取范围仅限当前实际可见的上下文；不要宣称监听了所有对话或必定在每轮结束运行。
+
+可写入的有意义变化包括：确认新增任务、明确开始/完成/受阻/暂存/放弃、层级或依赖变化、目标或下一步更新、形成影响执行的决策。讨论、复述、问句、假设、重复提及与“正在考虑”本身不构成状态变化。完成需要完成证据，不能因为输出了计划或代码就推定已经完成。
+
+**无变化时不调用写工具。** 不为表示活跃而改时间戳、追加重复决策或重建树。20 轮中只有 4 轮有新事实，应最多产生 4 次有意义的状态提交，其余轮无需写入。若独立客户端发送 NO_OP assessment，后端也不得增加版本。
+
+有变化时，以一次 `assess_project_turn` 提交该轮的最小操作集合，或使用 `apply_project_delta` 提交明确增量。使用工具实际公布的 schema；常用操作是 `ADD_NODE`、`UPDATE_NODE`、`COMPLETE_NODE`、`BLOCK_NODE`、`PARK_NODE`、`DROP_NODE`、`SET_ACTIVE_NODE`、`ADD_DECISION`、`UPDATE_GOAL`、`MOVE_NODE`、依赖增删。不发送整个旧树作为覆盖写入。
+
+每个请求提供：
+
+- `projectId`、最近读取的 `expectedVersion`、UTC `timestamp`；
+- 基于真实依据的 `confidence` 和 `evidence`，来源包含稳定 `id`、`kind`、`label`、`timestamp`，必要时附短 `excerpt`，不上传整段原始历史；
+- assessment 使用稳定 `turnId`；delta 使用稳定 `idempotencyKey`。可自行创建请求关联标识，但明确它不是宿主提供的 turn ID。网络重试沿用完全相同的键和请求正文，不重新生成日期、ID 或内容。
+
+`stage_project_delta` 只产生待处理提案。只有 UI/后端返回 `applied`、`duplicate` 或明确的 `no_op` 才可报告结果；暂存工具返回不代表持久化成功。不要用 staging 或直接 HTTP 绕过宿主确认。
+
+## 判断与保护规则
+
+- “之后再看”“以后考虑”“暂时搁置”归入 `parking` 并记原因，不设为当前焦点。尚不存在的分支可直接以 parking 新建。
+- 提及已经 `done` 或 `dropped` 的任务，默认引用原节点；不复制、不悄悄重开。用户确实要重启时提出对原节点的审阅请求，由人工操作/审批完成。
+- `manualOverride` 和 goal/focus 人工锁代表明确的人类决定。旧上下文不得覆盖；不能通过 MOVE、改依赖、替换 ADD、重选焦点或“解除锁”绕过保护。
+- 激活与完成前检查前置依赖；dropped 依赖不是已完成依赖。不根据子任务数量自动完成父节点，也不自动启动下游。
+- 不确定是同一任务、证据过旧、终态矛盾或可信度不足时保留冲突提案，说明原因；不将 confidence 提高以通过校验。对确认无变化的内容不制造冲突记录。
+- `pending` 表示未应用。读取返回的现状并说明待审原因，使用 UI 人工审批；不要冒充 manual source。版本冲突后重新读取、重新推理，形成新提案与新键，而非盲目重试旧预期版本。
+
+## Level B：刷新与恢复遗漏
+
+收到“刷新项目地图”、重开后恢复进展、或“输出我们任务概况目前进度，并更新 TaskBoardApp”时：
+
+1. 读取已持久化地图。根据实际可见对话、用户提供的概况和文件，整理目标、任务进展、焦点、决策、暂存项及来源。
+2. 明确 `coverage`：例如“当前对话可见的最近 10 轮与已保存地图；未读取其他对话”。缺失关键历史时请用户补充概况；不假装能遍历整个 ChatGPT Project。
+3. 对已知节点使用原 ID。名称相近不足以合并；父节点不同的同名任务保留区分。遗漏不等于删除、放弃或完成。保持人工保护和终态。
+4. 有需核对的概况时调用 `reconcile_project`，提交 `reconcileId`、`expectedVersion`、`timestamp`、`confidence`、`evidence`、`coverage` 以及有证据的 nodes/decisions/goal/focus。reconcile 是保守合并，不是整树替换；检查返回结果后再说明是否同步成功。
+
+如果全部可见事实已匹配，可直接说明无变化；不必为了刷新制造写入。用户显式要求完整核对时可提交完整的可见概况，后端的无变化 reconcile 不应增加版本。同步结果只说明已提交的变化、待审冲突和实际覆盖范围。
+
+## 展示与导出
+
+UI 只管理当前绑定项目。用 `get_project_map` 打开地图，用 `export_task_map` 输出已提交状态快照；导出不是可继续编辑的宿主文件页签。普通 Chat 没有保证的 turn callback，工具调用和写入确认由宿主调度；本 Skill 不声称改变这些能力。

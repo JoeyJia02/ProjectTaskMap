@@ -1,6 +1,6 @@
 # Data model and integration contract
 
-All IDs are stable opaque strings (UUID recommended). Dates are ISO-8601 UTC. Strings/arrays/body sizes are bounded by validation. Runtime schemas in `src/domain/schema.ts` are authoritative; API is JSON with camelCase fields.
+All IDs are stable opaque strings (UUID recommended). Dates are ISO-8601 UTC. Strings/arrays/body sizes are bounded by validation. Runtime schemas in `src/domain/schema.ts` are authoritative; API is JSON with camelCase fields. Source evidence preserves its original event timestamps. State/node `updatedAt`, `lastIncrementalUpdate`, and `lastFullReconcile` are monotonic event-time high-water marks: accepting a previously unknown historical task cannot lower stale-evidence protection. History/conflict/review audit timestamps and reconcile response `checkedAt` use server time. A no-change reconcile returns `checkedAt` and supplied `coverage` without writing state.
 
 ## Entities
 
@@ -58,7 +58,7 @@ close(): void
 
 ## SQLite
 
-Bindings table with composite uniqueness; projects table `(project_id, owner_id, version, state_json)`; history table `(project_id, version, state_json, reason, created_at)`; receipts `(project_id, idempotency_key, payload_hash, result_json)`; conflicts `(id, project_id, fingerprint, status, data_json)` with unique project+fingerprint. Foreign keys enabled; atomic `BEGIN IMMEDIATE` transactions. Snapshot at version 0 allows initial rollback. Rejected proposals leave state/version unchanged. NO_OP need not store a receipt because replay is semantically inert.
+Bindings table with composite uniqueness; projects table `(project_id, owner_id, version, state_json)`; history table `(project_id, version, state_json, reason, created_at)`; receipts `(project_id, idempotency_key, payload_hash, result_json)`; conflicts include `(id, project_id, fingerprint, status, data_json, request_key, payload_hash)` with unique project+fingerprint. Pending request keys also retain their payload identity. `rollback_guards` records IDs/semantic identities removed by an explicit rollback so later AI replay cannot revive them under a new delta key. Foreign keys enabled; atomic `BEGIN IMMEDIATE` transactions. Snapshot at version 0 allows initial rollback. Rejected proposals leave state/version unchanged. NO_OP need not store a receipt because replay is semantically inert.
 
 ## HTTP boundary
 
