@@ -52,7 +52,7 @@ export function planReconcile(state: ProjectState, overview: ProjectOverview): P
     const dependencies = observation.dependencies?.map(mapId);
     if (!existing) {
       operations.push({ type: 'ADD_NODE', node: { ...observation, id, parentId, dependencies,
-        status: observation.status === 'active' ? 'todo' : observation.status } });
+        status: observation.status } });
     } else {
       const changes: Extract<Operation, { type: 'UPDATE_NODE' }>['changes'] = {};
       if (observation.title !== existing.title) changes.title = observation.title;
@@ -70,17 +70,19 @@ export function planReconcile(state: ProjectState, overview: ProjectOverview): P
           case 'dropped': operations.push({ type: 'DROP_NODE', nodeId: id, reason: 'Explicit overview outcome' }); break;
           case 'parking': operations.push({ type: 'PARK_NODE', nodeId: id, reason: 'Deferred in supplied overview' }); break;
           case 'blocked': operations.push({ type: 'BLOCK_NODE', nodeId: id, reason: typeof observation.metadata?.blockReason === 'string' ? observation.metadata.blockReason : 'Blocked in supplied overview' }); break;
-          case 'todo': operations.push(existing.status === 'active' ? { type: 'SET_ACTIVE_NODE', nodeId: null } : { type: 'UNBLOCK_NODE', nodeId: id }); break;
-          case 'active': break;
+          case 'todo': operations.push({ type: 'UNBLOCK_NODE', nodeId: id }); break;
+          case 'active': operations.push({ type: 'START_NODE', nodeId: id }); break;
         }
       }
     }
     if (observation.status === 'active') focusCandidates.push(id);
   }
-  if (focusCandidates.length > 1) throw new DomainConflict('invalid_focus', 'Overview contains multiple active tasks');
   const explicitFocus = overview.activeNodeId === undefined ? undefined : overview.activeNodeId === null ? null : mapId(overview.activeNodeId);
-  if (focusCandidates.length && explicitFocus !== undefined && focusCandidates[0] !== explicitFocus) throw new DomainConflict('invalid_focus', 'Overview active task contradicts focus');
-  const focus = explicitFocus === undefined ? focusCandidates[0] : explicitFocus;
+  const focus = explicitFocus === undefined ? (state.activeNodeId === null && focusCandidates.length === 1 ? focusCandidates[0] : undefined) : explicitFocus;
+  if (explicitFocus) {
+    const observed = overview.nodes.find((_, index) => resolved.get(index)?.id === explicitFocus);
+    if (observed?.status && observed.status !== 'active') throw new DomainConflict('invalid_focus', 'Overview focus contradicts the task status');
+  }
   if (focus !== undefined && focus !== state.activeNodeId) operations.push({ type: 'SET_ACTIVE_NODE', nodeId: focus });
   if (overview.goal !== undefined && overview.goal !== state.goal) operations.push({ type: 'UPDATE_GOAL', goal: overview.goal });
   for (const decision of overview.decisions ?? []) operations.push({ type: 'ADD_DECISION', decision: {

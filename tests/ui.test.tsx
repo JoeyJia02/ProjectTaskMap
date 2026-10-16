@@ -27,6 +27,76 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('project UI', () => {
+  it('recovers reads when the network returns without clearing an unrelated write error', async () => {
+    const user = userEvent.setup(); let offline = true;
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.endsWith('/manual')) return response({ error: '需要重新核对提案' }, 409);
+      if (offline) throw new TypeError('Failed to fetch');
+      if (url.endsWith('/conflicts')) return response({ conflicts: [] });
+      if (url.endsWith('/history')) return response({ history: [] });
+      return response({ state: state() });
+    });
+    render(<App initialState={state()} initialToken="token" host={quietHost()} />);
+    await screen.findByText('连接待恢复');
+    expect(screen.getByText('v12')).toBeTruthy();
+    offline = false;
+    act(() => window.dispatchEvent(new Event('online')));
+    await screen.findByText('已连接');
+    await user.type(screen.getByLabelText('随手记想法'), '保留我的草稿{Enter}');
+    await screen.findByText('需要重新核对提案');
+    act(() => window.dispatchEvent(new Event('online')));
+    await waitFor(() => expect(screen.getByText('已连接')).toBeTruthy());
+    expect(screen.getByText('需要重新核对提案')).toBeTruthy();
+    expect((screen.getByLabelText('随手记想法') as HTMLInputElement).value).toBe('保留我的草稿');
+  });
+  it.each([{ operations: [] }, { operations: [{ type: 'NO_OP' }] }])('does not offer approval for a proposal without executable operations (%j)', async ({ operations }) => {
+    const user = userEvent.setup(); let dismissed = false;
+    const conflict: Conflict = { id: 'invalid-focus', projectId: 'demo-project', kind: 'invalid_focus', message: 'Overview contains multiple active tasks', status: 'pending', createdAt: demoState.updatedAt,
+      delta: { projectId: 'demo-project', idempotencyKey: 'invalid-overview', expectedVersion: 0, timestamp: demoState.updatedAt, source: 'reconcile', confidence: 1, evidence: [], operations } };
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.endsWith('/reviews/invalid-focus')) { dismissed = true; return response({ state: state(), outcome: 'no_op' }); }
+      if (url.endsWith('/conflicts')) return response({ conflicts: dismissed ? [] : [conflict] });
+      if (url.endsWith('/history')) return response({ history: [] });
+      return response({ state: state() });
+    });
+    render(<App initialState={state()} initialToken="token" host={quietHost()} />);
+    await screen.findByText(/这份旧提案设置了多个当前任务/);
+    expect(screen.queryByRole('button', { name: '批准更改' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: '保留当前' }));
+    await waitFor(() => expect(screen.queryByText(/这份旧提案设置了多个当前任务/)).toBeNull());
+    const request = fetchMock.mock.calls.find(call => String(call[0]).endsWith('/reviews/invalid-focus'))!;
+    expect(JSON.parse(request[1].body)).toEqual({ action: 'reject', expectedVersion: 12 });
+    expect(screen.getByText('v12')).toBeTruthy();
+  });
+  it('captures a linked idea with a single manual delta and no model refresh', async () => {
+    const user = userEvent.setup(); const host = quietHost();
+    fetchMock.mockImplementation(async (url: string) => response(url.endsWith('/manual') ? { state: state(), outcome: 'applied' } : url.endsWith('/conflicts') ? { conflicts: [] } : { history: [] }));
+    render(<App initialState={state()} initialToken="token" host={host} />);
+    await user.click(screen.getByRole('button', { name: '＋ 记想法' }));
+    await user.type(screen.getByLabelText('一句话想法'), '增加提醒');
+    await user.click(screen.getByText(/补充说明、关联任务与排序/));
+    await user.click(screen.getByRole('checkbox', { name: '项目地图界面' }));
+    await user.click(screen.getByRole('checkbox', { name: '项目绑定与持久化' }));
+    await user.selectOptions(screen.getByLabelText('想法优先级'), 'high');
+    await user.click(screen.getByRole('button', { name: '存入 Parking Lot' }));
+    await waitFor(() => expect((screen.getByLabelText('一句话想法') as HTMLInputElement).value).toBe(''));
+    const writes = fetchMock.mock.calls.filter(call => String(call[0]).endsWith('/manual'));
+    expect(writes).toHaveLength(1);
+    const payload = JSON.parse(writes[0][1].body);
+    expect(payload.operations).toEqual([expect.objectContaining({ type: 'ADD_NODE', node: expect.objectContaining({ title: '增加提醒', status: 'parking', metadata: { relatedNodeIds: ['ui', 'storage'], ideaPriority: 'high', ideaPinned: false } }) })]);
+    expect(host.sendRefresh).not.toHaveBeenCalled();
+  });
+
+  it('preserves the idea draft on failed save', async () => {
+    const user = userEvent.setup();
+    fetchMock.mockImplementation(async (url: string) => url.endsWith('/manual') ? response({ error: '保存失败' }, 500) : response(url.endsWith('/conflicts') ? { conflicts: [] } : { history: [] }));
+    render(<App initialState={state()} initialToken="token" host={quietHost()} />);
+    await user.click(screen.getByRole('button', { name: '＋ 记想法' }));
+    await user.type(screen.getByLabelText('一句话想法'), '保留草稿');
+    await user.click(screen.getByRole('button', { name: '存入 Parking Lot' }));
+    await screen.findByRole('alert');
+    expect((screen.getByLabelText('一句话想法') as HTMLInputElement).value).toBe('保留草稿');
+  });
   it('starts without fabricated tasks and restores the entered binding key without storing a secret', async () => {
     const user = userEvent.setup();
     fetchMock.mockImplementation(async (url: string) => url.endsWith('/bind') ? response({ state: state(), binding: { bindingKey: 'same-project-key' }, projectToken: 'scoped-token' }) : url.endsWith('/conflicts') ? response({ conflicts: [] }) : response({ history: [] }));
@@ -140,7 +210,7 @@ describe('project UI', () => {
     let reviewed = false;
     fetchMock.mockImplementation(async (url: string) => {
       if (url.endsWith('/reviews/conflict-1')) { reviewed = true; return response({ state: state(), outcome: 'applied' }); }
-      return response(url.endsWith('/conflicts') ? { conflicts: reviewed ? [] : [conflict] } : { history: [] });
+      return response(url.endsWith('/conflicts') ? { conflicts: reviewed ? [] : [conflict] } : url.endsWith('/history') ? { history: [] } : { state: state() });
     });
     render(<App initialState={state()} initialToken="token" host={quietHost()} />);
     await screen.findByText(conflict.message);
@@ -154,8 +224,10 @@ describe('project UI', () => {
     const user = userEvent.setup(); const host = quietHost(); host.sendRefresh = vi.fn(async () => true);
     render(<App initialState={state()} initialToken="token" host={host} />);
     await user.click(screen.getByRole('button', { name: '刷新项目地图' }));
-    await screen.findByText(/等待概况核对完成/);
-    expect(screen.getByText('等待概况核对')).toBeTruthy();
+    await screen.findByText(/已发送概况核对请求/);
+    expect(screen.queryByText('等待概况核对')).toBeNull();
+    expect(host.sendRefresh).toHaveBeenCalledWith(expect.stringContaining('get_project_state'));
+    expect(host.sendRefresh).toHaveBeenCalledWith(expect.stringContaining('不要调用 get_project_map'));
     expect(screen.getByText('v12')).toBeTruthy();
     expect(host.sendRefresh).toHaveBeenCalledWith(expect.stringContaining('reconcile_project 工具'));
     expect(fetchMock.mock.calls.some(call => String(call[0]).includes('/reconcile'))).toBe(false);
@@ -184,7 +256,7 @@ describe('project UI', () => {
 
   it('requires explicit rollback confirmation and sends target/current versions', async () => {
     const user = userEvent.setup();
-    fetchMock.mockImplementation(async (url: string) => response(url.endsWith('/rollback') ? { state: { ...state(), version: 13 }, outcome: 'applied' } : url.endsWith('/history') ? { history: [{ version: 0, reason: '初始化', createdAt: demoState.createdAt }, { version: 12, reason: '当前编辑', createdAt: demoState.updatedAt }] } : { conflicts: [] }));
+    fetchMock.mockImplementation(async (url: string) => response(url.endsWith('/rollback') ? { state: { ...state(), version: 13 }, outcome: 'applied' } : url.endsWith('/history') ? { history: [{ version: 0, reason: '初始化', createdAt: demoState.createdAt }, { version: 12, reason: '当前编辑', createdAt: demoState.updatedAt }] } : url.endsWith('/conflicts') ? { conflicts: [] } : { state: state() }));
     render(<App initialState={state()} initialToken="token" host={quietHost()} />);
     await user.click(screen.getByRole('button', { name: '版本记录' }));
     await user.click(await screen.findByRole('button', { name: '恢复此版本' }));
@@ -197,10 +269,58 @@ describe('project UI', () => {
 });
 
 describe('host and API boundary', () => {
+  it('routes reads and manual edits through the host without browser fetch or write fallback', async () => {
+    const host = quietHost(); host.canCallTools = () => true;
+    host.callTool = vi.fn(async () => ({ structuredContent: { data: { state: state(), outcome: 'applied' } } }));
+    const api = new ApiClient(); api.configure('capability', 'http://127.0.0.1:3000'); api.useHost(host);
+    expect((await api.state('demo-project')).version).toBe(12);
+    expect(host.callTool).toHaveBeenCalledWith('read_project_view', { projectId: 'demo-project', projectToken: 'capability', view: 'state' });
+    const change: Delta = { projectId: 'demo-project', idempotencyKey: 'once', expectedVersion: 12, timestamp: demoState.updatedAt, source: 'manual', confidence: 1, evidence: [], operations: [{ type: 'NO_OP' }] };
+    await api.apply(change, true);
+    expect(host.callTool).toHaveBeenLastCalledWith('edit_project_view', { projectId: 'demo-project', projectToken: 'capability', change: { action: 'manual', delta: change } });
+    host.callTool = vi.fn(async () => { throw new Error('Host denied'); });
+    await expect(api.apply(change, true)).rejects.toThrow('Host denied');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it('rejects host error envelopes and incomplete responses without silently falling back', async () => {
+    const host = quietHost(); host.canCallTools = () => true;
+    host.callTool = vi.fn(async () => ({ isError: true, content: [{ type: 'text', text: 'Project scope mismatch' }] }));
+    const api = new ApiClient(); api.configure('capability', 'http://127.0.0.1:3000'); api.useHost(host);
+    await expect(api.state('other')).rejects.toThrow('Project scope mismatch');
+    host.callTool = vi.fn(async () => ({}));
+    await expect(api.state('other')).rejects.toThrow('未返回有效数据');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
   it.each(['call_tool_result', 'mcp_tool_result'])('reads canonical %s metadata without treating public fields as credentials', envelope => {
     const context = parseToolResult({ state: state(), projectToken: 'public-not-a-token' }, { [envelope]: { _meta: { projectToken: 'private-token', apiBaseUrl: 'https://map.example' } } });
     expect(context.projectToken).toBe('private-token'); expect(context.state?.projectId).toBe('demo-project');
     expect(parseToolResult({ state: state(), projectToken: 'public-token' }).projectToken).toBeUndefined();
+  });
+  it.each([{}, { unrelated: 'host-metadata' }])('falls back to result metadata when supplied metadata has no map fields (%j)', suppliedMeta => {
+    const snapshot = state();
+    const delta: Delta = { projectId: snapshot.projectId, idempotencyKey: 'parser-only', expectedVersion: snapshot.version, timestamp: snapshot.updatedAt, source: 'ai', confidence: 1, evidence: [], operations: [{ type: 'NO_OP' }] };
+    expect(parseToolResult({ structuredContent: { state: snapshot }, _meta: { projectToken: 'result-test-token', apiBaseUrl: 'https://result.example', pendingDelta: delta } }, suppliedMeta)).toEqual({ state: snapshot, projectToken: 'result-test-token', apiBaseUrl: 'https://result.example', pendingDelta: delta });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it.each(['call_tool_result', 'mcp_tool_result'])('falls back per field while keeping valid nested %s metadata first', envelope => {
+    const snapshot = state();
+    const delta: Delta = { projectId: snapshot.projectId, idempotencyKey: 'parser-fallback-only', expectedVersion: snapshot.version, timestamp: snapshot.updatedAt, source: 'ai', confidence: 1, evidence: [], operations: [{ type: 'NO_OP' }] };
+    const context = parseToolResult({ structuredContent: { state: snapshot }, _meta: { projectToken: 'result-test-token', apiBaseUrl: 'https://result.example', pendingDelta: delta } }, {
+      projectToken: 'direct-test-token', apiBaseUrl: false, pendingDelta: [],
+      [envelope]: { _meta: { projectToken: '  ', apiBaseUrl: 'https://nested.example', pendingDelta: null } },
+    });
+    expect(context).toEqual({ state: snapshot, projectToken: 'direct-test-token', apiBaseUrl: 'https://nested.example', pendingDelta: delta });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it('does not let an incomplete first nested wrapper hide valid fields in the other wrapper', () => {
+    const context = parseToolResult({ state: state(), _meta: { projectToken: 'result-test-token', apiBaseUrl: 'https://result.example' } }, {
+      projectToken: 'direct-test-token', apiBaseUrl: 'https://direct.example',
+      call_tool_result: { _meta: { projectToken: 'preferred-test-token', apiBaseUrl: 123 } },
+      mcp_tool_result: { _meta: { projectToken: 'other-test-token', apiBaseUrl: 'https://other-nested.example' } },
+    });
+    expect(context.projectToken).toBe('preferred-test-token');
+    expect(context.apiBaseUrl).toBe('https://other-nested.example');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
   it('reads standard MCP tool results and keeps authenticated exports out of query strings', async () => {
     expect(parseToolResult({ structuredContent: { state: state() }, _meta: { projectToken: 'standard-token' } }).projectToken).toBe('standard-token');

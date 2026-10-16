@@ -22,7 +22,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   const widgetOrigin = env.TASK_MAP_WIDGET_ORIGIN ?? 'https://web-sandbox.oaiusercontent.com';
   if (new URL(widgetOrigin).origin !== widgetOrigin || !widgetOrigin.startsWith('https://')) throw new Error('TASK_MAP_WIDGET_ORIGIN must be an HTTPS origin.');
-  const allowedOrigins = [...new Set([...(env.TASK_MAP_ALLOWED_ORIGINS ?? url.origin).split(',').map(s => s.trim()).filter(Boolean), widgetOrigin])];
+  // ChatGPT hosts the declared default widget domain on this distinct sandbox
+  // origin. Keep both exact origins; never allow every sandbox subdomain.
+  const defaultWidgetFrameOrigin = widgetOrigin === 'https://web-sandbox.oaiusercontent.com'
+    ? ['https://web-sandbox-oaiusercontent-com.web-sandbox.oaiusercontent.com'] : [];
+  const allowedOrigins = [...new Set([...(env.TASK_MAP_ALLOWED_ORIGINS ?? url.origin).split(',').map(s => s.trim()).filter(Boolean), widgetOrigin, ...defaultWidgetFrameOrigin])];
   for (const origin of allowedOrigins) if (new URL(origin).origin !== origin) throw new Error('CORS entries must be explicit origins.');
   const port = Number(env.PORT ?? 3000);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid PORT.');

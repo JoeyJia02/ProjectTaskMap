@@ -10,6 +10,7 @@ import {
 import { canonical, DomainConflict, normalizeTitle, reduceDelta, validateGraph } from '../domain/reducer.js';
 import { assessmentToDelta } from '../domain/assessment.js';
 import { overviewDeltaBase, planReconcile } from '../domain/reconcile.js';
+import { reviewFamily } from '../domain/review-family.js';
 
 export class StoreError extends Error {
   readonly statusCode: number;
@@ -104,8 +105,10 @@ export class ProjectStore {
     }
     return row.payload_hash === payloadHash ? { outcome: 'duplicate', state } : this.pending(state, delta, 'idempotency_conflict', 'Idempotency key was already used with a different payload', payloadHash);
   }
-  private applyInside(state: ProjectState, delta: ProjectStateDelta, payloadHash: string): MutationResult {
-    const replay = this.replay(state, delta, payloadHash); if (replay) return replay;
+  private applyInside(state: ProjectState, delta: ProjectStateDelta, payloadHash: string, reviewing = false): MutationResult {
+    // The stored review status is the idempotency guard for approvals. Historical
+    // failed review requests must not become new idempotency conflicts themselves.
+    const replay = reviewing ? undefined : this.replay(state, delta, payloadHash); if (replay) return replay;
     // Explicit empty/NO_OP reports are inert even after a concurrent state change.
     if (delta.operations.every(op => op.type === 'NO_OP')) return { outcome: 'no_op', state };
     if (delta.expectedVersion !== state.version) return this.pending(state, delta, 'stale_version', `Expected version ${delta.expectedVersion}; current version is ${state.version}`, payloadHash);
@@ -132,6 +135,7 @@ export class ProjectStore {
       this.db.prepare('INSERT INTO receipts VALUES (?, ?, ?, ?)').run(state.projectId, delta.idempotencyKey, payloadHash, JSON.stringify(result));
       return result;
     } catch (error) {
+      if (reviewing && error instanceof DomainConflict) throw new StoreError(409, 'approval_blocked', `无法批准：${reviewFailureReason(error.kind)}。原提案和任务均已保留，未新增待审项。`);
       if (error instanceof DomainConflict) return this.pending(state, delta, error.kind, error.message, payloadHash);
       throw error;
     }
@@ -179,11 +183,18 @@ export class ProjectStore {
         const timestamp = now();
         const approved: ProjectStateDelta = { ...conflict.delta, source: 'manual', confidence: 1, timestamp, expectedVersion,
           idempotencyKey: `review:${conflict.id}`, evidence: [...conflict.delta.evidence.slice(-99), { id: `review:${conflict.id}`, kind: 'manual', label: 'Human approved proposal', timestamp }] };
-        result = this.applyInside(state, approved, hash(approved));
-        if (result.outcome === 'pending') return result;
+        result = this.applyInside(state, approved, hash(approved), true);
       }
       conflict.status = action === 'approve' ? 'approved' : 'rejected'; conflict.reviewedAt = now(); conflict.reviewVersion = result.state.version; conflict.reviewAction = action;
       this.db.prepare('UPDATE conflicts SET status = ?, data_json = ? WHERE id = ?').run(conflict.status, JSON.stringify(conflict), conflict.id);
+      // Preserve audit records, but close proven failed-approval copies together
+      // with the original. Independent proposals are never grouped by title.
+      for (const copy of reviewFamily(conflict, this.conflicts(ownerId, projectId))) {
+        if (copy.id === conflict.id || copy.status !== 'pending') continue;
+        copy.status = 'rejected'; copy.reviewAction = 'reject'; copy.reviewedAt = conflict.reviewedAt; copy.reviewVersion = result.state.version;
+        copy.message = '重复的失败审批记录已随原提案处理；未单独执行。';
+        this.db.prepare('UPDATE conflicts SET status = ?, data_json = ? WHERE id = ?').run(copy.status, JSON.stringify(copy), copy.id);
+      }
       return { ...result, conflict };
     });
   }
@@ -211,4 +222,15 @@ export class ProjectStore {
     });
   }
   close(): void { this.db.close(); }
+}
+
+function reviewFailureReason(kind: string): string {
+  const reasons: Record<string, string> = {
+    duplicate_task: '提案把已有任务当成新增任务，请按现有任务 ID 重新核对',
+    missing_endpoint: '提案引用的任务或所属分支不存在，请重新核对 ID',
+    unresolved_dependency: '前置任务尚未完成', hierarchy_cycle: '所属分支形成循环', dependency_cycle: '任务依赖形成循环',
+    ambiguous_match: '存在无法确定对应关系的同名任务，请重新核对 ID',
+    invalid_focus: '当前焦点与任务状态不一致，请重新核对',
+  };
+  return reasons[kind] || '提案不能应用于当前地图，请读取最新状态并重新生成提案';
 }

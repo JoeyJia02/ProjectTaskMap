@@ -11,3 +11,6 @@ test-results/
 playwright-report/
 .tmp/
 *.log
+
+# Personal interview preparation stays local.
+docs/面试准备-项目全景与决策复盘.txt

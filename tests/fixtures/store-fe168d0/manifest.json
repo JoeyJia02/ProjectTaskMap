@@ -1,0 +1,43 @@
+{
+  "sourceRepository": "Project Task Map (D:\\TaskKanban)",
+  "commit": "fe168d0cc1d5fe6108b6e7f9c678f59fb4ac8157",
+  "extraction": "Verbatim git show <commit>:<path> bytes; no source rewrites.",
+  "scope": "Minimal historical ProjectStore and its local domain dependencies; Node and zod dependencies resolve from the test project.",
+  "files": [
+    {
+      "sourcePath": "src/store/index.ts",
+      "fixturePath": "src/store/index.ts",
+      "gitBlobOid": "314b881fd7dc93c16ca4812f4a22f562074bda7a",
+      "bytes": 18307,
+      "sha256": "703c081dcd9f89831498f9353d434f067f5f2ff0e44cd97f433dd17b7afd0986"
+    },
+    {
+      "sourcePath": "src/domain/schema.ts",
+      "fixturePath": "src/domain/schema.ts",
+      "gitBlobOid": "eec69b6017141ad19002abfb014957852318ba19",
+      "bytes": 6569,
+      "sha256": "57e8c6813c77ddf4d75c0e5d502af8177024ffd63f21544afc3a4b5c7b617528"
+    },
+    {
+      "sourcePath": "src/domain/reducer.ts",
+      "fixturePath": "src/domain/reducer.ts",
+      "gitBlobOid": "d2f1d68a4852204ea5cca3e172d798aa37753c1e",
+      "bytes": 15006,
+      "sha256": "5e307e3d9c919755c33cbf003d0027a6aab987bbd8ffa6667df386f3fccbeef9"
+    },
+    {
+      "sourcePath": "src/domain/assessment.ts",
+      "fixturePath": "src/domain/assessment.ts",
+      "gitBlobOid": "eba1af802bed4ddbea30788e60bb80e014338c31",
+      "bytes": 685,
+      "sha256": "fa3af4fa3efd1033f7bd6a96dcc5b71b5dd95e38eeaf7a858e4f476166010e71"
+    },
+    {
+      "sourcePath": "src/domain/reconcile.ts",
+      "fixturePath": "src/domain/reconcile.ts",
+      "gitBlobOid": "abd59300b93882ab04058d5a20703695dd16e3d8",
+      "bytes": 7038,
+      "sha256": "45d11b5ce9c8b834d547a94b5a5d72ce59a42fbf135de138575a6c65cba4ea7f"
+    }
+  ]
+}

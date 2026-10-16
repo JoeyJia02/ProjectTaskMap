@@ -9,10 +9,13 @@ description: 在使用 Project Task Map 管理单个 ChatGPT Project 时，依�
 
 ## 绑定与读取
 
+- 用户只点选或提及本插件时，默认打开当前项目地图：先检查已有绑定和当前项目身份，不泛问“想用插件做什么”。确认稳定绑定后先读取状态；首次打开尚未保存任务的地图时，若当前可见上下文已有用户确认的同一项目事实或任务，按下文 Level B 形成有依据的 overview，执行一次保守 reconcile，再打开地图一次。没有可核实的事实时保持空图，说明“当前地图尚未保存任务，这不代表项目没有任务”，以及实际可见范围。不要因空图重建绑定，不扫描隐藏历史，不编造任务；pending 不是导入成功。已有非空地图仅打开，不因此重新导入。用户明确要求只读、仅查看、不要同步或不要改动时，其限制优先：仅读取已有绑定和状态，不创建绑定、不执行 reconcile、不保存本地项目说明。
+- 用户已要求“整理现有推进图／同步当前进度”时，读取可见依据并保守合并，不重复询问是否要同步。没有证据的完成状态不导入。
+
 - 使用 Project instructions 中的 `Task Map bindingKey` 调用 `bind_project`，重用返回的 `projectId`。绑定键是项目定位符，不是密码；不存放 owner secret、OAuth token 或 UI projectToken。
-- 名称不是身份。改名、重连和新对话继续使用原 bindingKey；不同 Project 使用不同键。键缺失时请用户提供已有键或明确创建新绑定，不按同名猜测项目。
+- 名称不是身份。改名、重连和新对话继续使用原 bindingKey；不同 Project 使用不同键。当前项目没有保存的键且可验证稳定宿主 Project ID 时，首次使用生成 `task-map-<hostProjectId>` 并保存到当前项目说明；存在旧绑定线索时先核对。身份缺失或有歧义才询问绑定，不按同名猜测，不借用插件开发项目的键。
 - 没有已验证的宿主 Project ID 时省略 `hostProjectId`，不编造它。匿名会话标识也不是 Project ID。
-- 开始更新前用 `get_project_map` 读取已有 IDs、版本、状态、依据和人工保护；所有变更针对这些稳定 IDs。工具不可用时说明尚未写入，保留提案供后续重试。
+- 开始更新前用 `get_project_state` 读取已有 IDs、版本、状态、依据和人工保护；所有变更针对这些稳定 IDs。工具不可用时说明尚未写入，保留提案供后续重试。
 
 ## Level A：逐轮增量判断
 
@@ -54,4 +57,4 @@ description: 在使用 Project Task Map 管理单个 ChatGPT Project 时，依�
 
 ## 展示与导出
 
-UI 只管理当前绑定项目。用 `get_project_map` 打开地图，用 `export_task_map` 输出已提交状态快照；导出不是可继续编辑的宿主文件页签。普通 Chat 没有保证的 turn callback，工具调用和写入确认由宿主调度；本 Skill 不声称改变这些能力。
+UI 只管理当前绑定项目。绑定、读取与常规刷新不生成新界面：使用 `get_project_state` 读取，更新后用文字报告结果和版本，已有地图会自动读取已保存的变化。不要为了确认更新再次调用 `get_project_map`；该工具仅用于明确的打开/展示请求，重复调用可能产生多个宿主页签。用 `get_project_map` 打开地图，用 `export_task_map` 输出已提交状态快照；导出不是可继续编辑的宿主文件页签。普通 Chat 没有保证的 turn callback，工具调用和写入确认由宿主调度；本 Skill 不声称改变这些能力。

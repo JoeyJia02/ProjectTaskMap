@@ -4,6 +4,8 @@
 
 这不是全局 Dashboard。底层是带父子层级和跨分支依赖的图，UI 以树呈现；每轮只接收有证据的增量，刷新执行 reconcile，保留已有任务和人工决定。
 
+当前使用状态：用户已确认客户端验收完成，并在多个实际项目中使用。使用反馈与历史验收范围见 [客户端验收记录](docs/client-acceptance.md)。
+
 ## 本地运行
 
 需要 Node.js 24.x 与 npm。不需要 OpenAI API key，不会产生模型 API 调用费用。
@@ -20,6 +22,8 @@ npm start
 开发：`npm run dev` 启动后端；另开终端 `npm run dev:ui` 启动 Vite。持久化文件为 `data/task-map.sqlite`，停止/重启不丢状态。不要提交 `.env`、SQLite 或用户证据。
 
 ## 接入 ChatGPT
+
+这台电脑的本地接入状态与必要操作见 [用户短清单](docs/桌面客户端接入操作指南.md)，验证依据见 [本地接入验收](docs/local-connection-verification.md)。本地 Codex 连接与普通 ChatGPT 插件是两条接入流程。
 
 按 [ChatGPT Pro 接入指南](docs/chatgpt-connection.md) 配置 HTTPS/隧道及 OAuth，连接 `/mcp`，调用 `bind_project`。把非敏感 `bindingKey` 与外部 `projectId` 保存到该 Project instructions；项目名不是身份。加载 [Task Manager Skill](skills/task-manager/SKILL.md) 的管理策略（普通 Chat 可将策略加入 Project instructions）。
 
@@ -53,3 +57,17 @@ Windows 可使用已安装的 Chrome：`$env:PLAYWRIGHT_CHANNEL='chrome'; npm ru
 其他交付：[安装与运维](docs/setup.md)、[界面原型](docs/ui-prototype.md)、[架构决策](DECISIONS.md)、[独立代码审查](docs/code-review.md)、[产品验收](docs/product-review.md)。
 
 核心目录：`src/domain` 纯状态规则；`src/store` SQLite；`src/server` HTTP/OAuth/MCP；`src/ui` React；`src/artifacts` Markdown/HTML 投影；`skills/task-manager` 行为策略。`task-map.md` 是仓库交付概况，实时用户 artifact 通过导出端点或 `export_task_map` 生成。
+
+### 快速记录 Parking Lot
+
+地图顶部的“＋ 记想法”可以直接人工保存一条暂存想法，不调用模型或全量核对。只填一句话即可；可选说明、多个关联任务、优先级和置顶。任务详情的“为此任务记想法”会预选该任务；详情中也能查看关联想法。关联是参考关系，不是父子层级或执行依赖。
+
+Parking Lot 支持编辑和两种排序：默认按最新记录优先保持顺序稳定，也可选按置顶、优先级、关联当前焦点、记录时间自动排序。排序只影响展示，不产生项目版本。保存沿用人工增量接口、版本校验和人工保护，失败保留当前表单供重试。
+
+### 日常操作
+
+- 顶部“随手记想法”回车保存，不调用模型、不刷新整张地图；失败保留输入。在 Parking Lot 中补充关联任务、优先级和置顶。
+- 任务地图默认显示未完成任务，可搜索名称/说明，筛选进行中、受阻、关联想法或全部；匹配子任务时保留父分支。
+- 多个任务可以同时进行，`START_NODE` 只改变状态；`SET_ACTIVE_NODE` 选择一个当前焦点，切换或清空焦点不会暂停其他任务。旧数据无需迁移。
+- 审批显示当前值和提议值，原始提案及证据可展开；无可执行更改的旧提案只能保留当前。
+- 自动读取失败保留快照，网络恢复或切回页面会重试读取。业务操作错误单独显示，自动读取成功不会抹掉审批错误。

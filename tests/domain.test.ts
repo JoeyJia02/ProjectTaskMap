@@ -32,6 +32,24 @@ describe('runtime contracts and deterministic assessment', () => {
 });
 
 describe('pure atomic graph reducer', () => {
+  it('keeps parallel work active while changing or clearing focus', () => {
+    let state = reduceDelta(empty(), delta([{ type: 'ADD_NODE', node: { id: 'a', title: 'A', status: 'active' } }, { type: 'ADD_NODE', node: { id: 'b', title: 'B', status: 'active' } }])).state;
+    state = reduceDelta(state, delta([{ type: 'SET_ACTIVE_NODE', nodeId: 'a' }, { type: 'SET_ACTIVE_NODE', nodeId: 'b' }, { type: 'SET_ACTIVE_NODE', nodeId: null }])).state;
+    expect(state.nodes.map(node => node.status)).toEqual(['active', 'active']);
+    expect(state.activeNodeId).toBeNull();
+    state = reduceDelta(state, delta([{ type: 'UNBLOCK_NODE', nodeId: 'a' }])).state;
+    expect(state.nodes[0].status).toBe('todo');
+    expect(state.nodes[1].status).toBe('active');
+  });
+  it('merges multiple active observations without inventing a focus and preserves terminal protections', () => {
+    const overview = overviewSchema.parse({ projectId: 'project', reconcileId: 'parallel', expectedVersion: 0, timestamp, confidence: 1, evidence, coverage: 'Current work', nodes: [{ id: 'a', title: 'A', status: 'active' }, { id: 'b', title: 'B', status: 'active' }] });
+    let state = reduceDelta(empty(), planReconcile(empty(), overview)).state;
+    expect(state.nodes.filter(node => node.status === 'active')).toHaveLength(2);
+    expect(state.activeNodeId).toBeNull();
+    state = reduceDelta(state, delta([{ type: 'COMPLETE_NODE', nodeId: 'a' }])).state;
+    expect(() => reduceDelta(state, delta([{ type: 'START_NODE', nodeId: 'a' }]))).toThrow(/explicit human/);
+    expect(() => planReconcile(state, { ...overview, activeNodeId: 'a', nodes: [{ id: 'a', title: 'A', status: 'done' }] })).toThrow(/contradicts/);
+  });
   it('does not mutate input and reports a net-zero batch as unchanged', () => {
     const initial = empty();
     const result = reduceDelta(initial, delta([{ type: 'UPDATE_GOAL', goal: 'Temporary' }, { type: 'UPDATE_GOAL', goal: 'Ship' }]));
@@ -61,7 +79,7 @@ describe('pure atomic graph reducer', () => {
     state = reduceDelta(state, delta([{ type: 'SET_ACTIVE_NODE', nodeId: 'a' }], { source: 'manual' })).state;
     expect(() => reduceDelta(state, delta([{ type: 'SET_ACTIVE_NODE', nodeId: 'b' }]))).toThrow(/human/);
     state = reduceDelta(state, delta([{ type: 'SET_ACTIVE_NODE', nodeId: 'b' }], { source: 'manual' })).state;
-    expect(state.nodes.find(node => node.id === 'a')?.status).toBe('todo'); expect(state.parkingLot).toEqual([]);
+    expect(state.nodes.find(node => node.id === 'a')?.status).toBe('active'); expect(state.parkingLot).toEqual([]);
     state = reduceDelta(state, delta([{ type: 'COMPLETE_NODE', nodeId: 'b' }], { source: 'manual' })).state;
     expect(state.activeNodeId).toBeNull();
   });

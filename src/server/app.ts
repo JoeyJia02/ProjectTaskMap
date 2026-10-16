@@ -8,10 +8,12 @@ import { renderMarkdown, renderHtml } from '../artifacts/index.js';
 import { Auth, AuthError, installOAuth, type Principal } from './auth.js';
 import type { Config } from './config.js';
 import { createMcpServer } from './mcp.js';
+import { OAuthStore } from './oauth-store.js';
 
 export function createApp(config: Config, store = new ProjectStore(config.dbPath)) {
   const app = express();
-  const auth = new Auth(config);
+  const oauth = new OAuthStore(config);
+  const auth = new Auth(config, oauth);
   app.disable('x-powered-by');
   app.use((req, res, next) => {
     res.set({ 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Cache-Control': 'no-store' });
@@ -25,12 +27,21 @@ export function createApp(config: Config, store = new ProjectStore(config.dbPath
       res.set('Access-Control-Expose-Headers', 'WWW-Authenticate, MCP-Session-Id');
     }
     if (req.method === 'OPTIONS') { res.sendStatus(204); return; }
-    if (req.method === 'POST' && (req.path.startsWith('/api/') || req.path === '/mcp' || req.path === '/register') && !req.is('application/json')) { res.status(415).json({ error: 'Use application/json.' }); return; }
+    if (req.method === 'POST' && (req.path.startsWith('/api/') || req.path === '/register') && !req.is('application/json')) { res.status(415).json({ error: 'Use application/json.' }); return; }
     next();
+  });
+  // Hosts can probe without a JSON body before OAuth. Challenge first, before
+  // media-type checks or parsing, so discovery never depends on a valid payload.
+  app.post('/mcp', (req, res, next) => {
+    try {
+      res.locals.mcpPrincipal = auth.request(req, 'mcp');
+      if (!req.is('application/json')) { res.status(415).json({ error: 'Use application/json.' }); return; }
+      next();
+    } catch (error) { next(error); }
   });
   app.use(express.json({ limit: '512kb' }));
   app.use(express.urlencoded({ extended: false, limit: '8kb' }));
-  installOAuth(app, auth);
+  installOAuth(app, auth, oauth);
   app.get('/health', (_req, res) => res.json({ ok: true, version: '0.1.0' }));
   app.use('/api', (req, res, next) => { try { res.locals.principal = auth.request(req, 'api'); next(); } catch (e) { next(e); } });
   app.post('/api/bind', (req, res) => {
@@ -66,7 +77,7 @@ export function createApp(config: Config, store = new ProjectStore(config.dbPath
   app.get('/api/projects/:id/artifact.html', (req, res) => res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'").type('html').attachment('task-map.html').send(renderHtml(store.get(owner(res), pathId(req)))));
   app.post('/mcp', async (req, res, next) => {
     try {
-      const principal = auth.request(req, 'mcp');
+      const principal = res.locals.mcpPrincipal as Principal;
       const server = createMcpServer(store, auth, principal);
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
       res.on('close', () => { void transport.close(); void server.close(); });
@@ -87,5 +98,6 @@ export function createApp(config: Config, store = new ProjectStore(config.dbPath
     if (status === 500) console.error(`Unhandled request failure: ${req.method} ${req.path}`);
     res.status(status).json({ error: status === 500 ? 'Internal server error.' : e.message ?? 'Request failed.' });
   });
-  return { app, store, auth };
+  const close = () => { oauth.close(); store.close(); };
+  return { app, store, auth, oauth, close };
 }

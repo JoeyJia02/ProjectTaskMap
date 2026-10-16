@@ -18,6 +18,11 @@ export function validateGraph(state: ProjectState): void {
   const nodes = new Map(state.nodes.map(node => [node.id, node]));
   if (nodes.size !== state.nodes.length) throw new DomainConflict('duplicate_id', 'Task IDs must be unique');
   for (const node of state.nodes) {
+    const related = node.metadata.relatedNodeIds ?? [];
+    if (new Set(related).size !== related.length) throw new DomainConflict('duplicate_relation', 'Related task IDs must be unique');
+    for (const id of related) {
+      if (id === node.id || !nodes.has(id)) throw new DomainConflict('invalid_relation', 'Related task must exist and cannot be the idea itself');
+    }
     if (node.parentId && !nodes.has(node.parentId)) throw new DomainConflict('missing_endpoint', `Parent ${node.parentId} does not exist`);
     if (new Set(node.dependencies).size !== node.dependencies.length) throw new DomainConflict('duplicate_dependency', 'Dependency IDs must be unique');
     for (const dep of node.dependencies) if (!nodes.has(dep)) throw new DomainConflict('missing_endpoint', `Dependency ${dep} does not exist`);
@@ -34,9 +39,8 @@ export function validateGraph(state: ProjectState): void {
   };
   checkCycles(node => node.parentId ? [node.parentId] : [], 'hierarchy');
   checkCycles(node => node.dependencies, 'dependency');
-  const active = state.nodes.filter(node => node.status === 'active');
-  if ((state.activeNodeId === null && active.length !== 0) || (state.activeNodeId !== null && (active.length !== 1 || active[0].id !== state.activeNodeId))) {
-    throw new DomainConflict('invalid_focus', 'Exactly the focused task must be active');
+  if (state.activeNodeId !== null && nodes.get(state.activeNodeId)?.status !== 'active') {
+    throw new DomainConflict('invalid_focus', 'Current focus must reference an active task');
   }
   for (const node of state.nodes) if (node.status === 'active' || node.status === 'done') {
     if (node.dependencies.some(id => nodes.get(id)!.status !== 'done')) throw new DomainConflict('unresolved_dependency', `Task ${node.id} has unfinished prerequisites`);
@@ -104,7 +108,6 @@ export function reduceDelta(original: ProjectState, delta: ProjectStateDelta): {
           if (Object.entries(provided).every(([key, value]) => key === 'title' ? normalizeTitle(existing.title) === normalizeTitle(value as string) : same(key === 'dependencies' ? [...existing.dependencies].sort() : existing[key as keyof TaskNode], value))) break;
           throw new DomainConflict('duplicate_task', `Task ${input.title} already exists; update its stable ID explicitly`);
         }
-        if (input.status === 'active') throw new DomainConflict('invalid_transition', 'Add as todo, then use SET_ACTIVE_NODE to activate');
         const node: TaskNode = { id: input.id, title: input.title, summary: input.summary ?? '', parentId: input.parentId ?? null,
           dependencies: [...new Set(input.dependencies ?? [])], status: input.status ?? 'todo', metadata: input.metadata ?? {},
           createdAt: delta.timestamp, updatedAt: delta.timestamp, sourceRefs: delta.evidence, manualOverride: isHuman };
@@ -137,7 +140,7 @@ export function reduceDelta(original: ProjectState, delta: ProjectStateDelta): {
       case 'UNBLOCK_NODE': {
         const node = get(operation.nodeId);
         if (node.status === 'todo') break;
-        if (node.status !== 'blocked' && !(isHuman && terminal(node.status))) throw new DomainConflict('invalid_transition', `Cannot unblock ${node.status}`);
+        if (!['blocked', 'active', 'parking'].includes(node.status) && !(isHuman && terminal(node.status))) throw new DomainConflict('invalid_transition', `Cannot unblock ${node.status}`);
         transition(node, 'todo', true); delete node.metadata.blockReason; break;
       }
       case 'PARK_NODE': {
@@ -146,13 +149,16 @@ export function reduceDelta(original: ProjectState, delta: ProjectStateDelta): {
         if (!item || item.reason !== operation.reason) { touch(node); state.parkingLot = state.parkingLot.filter(entry => entry.nodeId !== node.id); state.parkingLot.push({ nodeId: node.id, reason: operation.reason, parkedAt: delta.timestamp }); }
         break;
       }
+      case 'START_NODE': {
+        const node = get(operation.nodeId);
+        if (node.status === 'blocked') throw new DomainConflict('invalid_transition', 'Unblock the task before starting it');
+        transition(node, 'active', isHuman); break;
+      }
       case 'SET_ACTIVE_NODE': {
         if (operation.nodeId === state.activeNodeId) break;
         const next = operation.nodeId === null ? undefined : get(operation.nodeId);
         if (next?.status === 'blocked') throw new DomainConflict('invalid_transition', 'Unblock the task before activating it');
         if (next) { authorize(next); if (terminal(next.status) && !isHuman) throw new DomainConflict('terminal_state', 'Reopening requires a human decision'); }
-        const previous = state.activeNodeId ? get(state.activeNodeId) : undefined;
-        if (previous) { touch(previous); previous.status = 'todo'; }
         changeFocus(operation.nodeId);
         if (next) { touch(next); next.status = 'active'; state.parkingLot = state.parkingLot.filter(item => item.nodeId !== next.id); }
         break;

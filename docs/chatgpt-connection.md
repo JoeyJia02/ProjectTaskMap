@@ -20,17 +20,17 @@
 
 反向代理应转发 `/mcp`、`/api`、OAuth discovery、`/register`、`/authorize` 和 `/token` 等服务路由，保留 Authorization 请求头并允许 MCP Streamable HTTP 传输。公网 origin 必须是 HTTPS；HTTP 仅允许 localhost 开发。短期隧道可验证开发流程，正式使用与公开提交需要稳定 HTTPS 服务和域名控制。不要把本地 `127.0.0.1` URL 填入远端 ChatGPT。
 
-## 2. 创建开发模式连接
+## 2. 创建 MCP 应用连接
 
 官方开发模式文档目前列出网页版 Pro、Plus、Business、Enterprise、Education 的 MCP 读写支持，实际开关和策略仍以账号/工作区为准。[官方 Developer mode](https://developers.openai.com/api/docs/guides/developer-mode)
 
-1. 在 ChatGPT 的 **Settings → Security and login** 开启 Developer mode。
-2. 打开 **ChatGPT Plugins**，点击加号，创建连接，填写你的 `https://tasks.example.com/mcp`。
-3. 选择 OAuth，并使用动态客户端注册（DCR）。本实现提供 `/register`、authorization code + PKCE S256；个人版本使用完整的 `projects:read projects:write` 授权，单独请求只读权限会被拒绝，不会静默升级权限。
+1. 本次账号截图已确认桌面客户端入口为 **插件 → 添加 → 创建 MCP 应用**。已能打开这个表单时，直接继续，无需再寻找 Developer mode 开关。其他版本的入口以实际界面及官方文档为准。
+2. 名称填写 `Project Task Map`；连接选择 **服务器 URL**，填写已部署且验证可达的 `https://你的域名/mcp`。图标和描述可省略，不要使用示例域名或本机地址。
+3. 身份验证保持 **OAuth**，高级设置保持默认。勾选已了解连接风险后点击创建。本实现支持动态客户端注册（DCR）、authorization code + PKCE S256；个人版本使用完整的 `projects:read projects:write` 授权，单独请求只读权限会被拒绝，不会静默升级权限。
 4. 按宿主授权流程打开你部署的 `/authorize` 页面。在确认域名正确后输入 owner secret。不要把密码贴进聊天、工具参数、Project instructions、GitHub 或截图。
-5. 新开对话，从加号/More 菜单选择该插件。工具或 schema 更新后在连接详情刷新工具列表。
+5. 连接成功后，在要使用任务地图的对话中选择该插件。工具或 schema 更新后在连接详情刷新工具列表。
 
-此个人部署仅有一个所有者，没有团队账号系统。OAuth token 有效期为 1 小时；当前没有 refresh-token 流程，过期后按宿主提示重新连接。临时客户端注册/授权信息在内存中，重启后可能需要重新创建或连接开发模式应用。它不影响已保存在 SQLite 的项目状态。
+此个人部署仅有一个所有者，没有团队账号系统。OAuth 访问 token 有效期最长 1 小时，支持轮换 refresh token，单次授权最长 30 天。支持刷新的客户端可自动续期；期满、撤销或部署密钥/issuer 改变后需重新授权。客户端与刷新授权持久化到 SQLite，正常重启不要求重新连接；正在进行的登录需重试。刷新令牌重放会撤销同一授权及其派生项目令牌。
 
 详细入口会随产品更新变化，以官方接入与快速开始说明为准。[官方 quickstart](https://developers.openai.com/plugins/build/app-quickstart)、[官方 OAuth 契约](https://developers.openai.com/plugins/build/auth)
 
@@ -80,3 +80,13 @@ Level B 核对只合并实际提供的证据。其他会话不可见时，补充
 - 提供遗漏进度概况后 reconcile 能恢复有证据的变化，且说明未覆盖的历史。
 
 如果工具调用失败，保留最后一次成功状态，检查服务日志中的相关 ID 和 HTTP 状态。不要为调试记录 Authorization 头、owner secret、完整聊天或工具 `_meta` 凭据。
+
+## 避免重复地图页签
+
+`bind_project` 只绑定项目，`get_project_state` 只读取数据；常规刷新和更新后不再调用界面工具。只有用户明确要求打开地图时才调用 `get_project_map`。已打开的地图在可见时每 15 秒读取保存状态。刷新按钮发送核对请求，保存结果在对话中说明。
+
+每次显式打开仍可能生成一个宿主页签，插件没有接管宿主页签的关闭或复用。已有重复页签可关闭，只保留一个，不会删除项目数据。服务升级后若宿主仍缓存旧工具列表，需要在已有插件的设置中刷新工具；不需要新建项目绑定。
+
+### 界面升级与缓存
+
+UI 入口固定使用 `ui://project-task-map/map-v3.html`，保留已发布 URI 的别名。不要随界面修改更换入口：已有会话可能保留旧工具描述，导致宿主报 Unknown resource，即使服务器有旧地址别名也不够。重新构建部署后，重新加载组件以获取最新 HTML；工具定义变更时刷新已有应用的工具目录。仅刷新项目数据不会替换运行中的界面，不要通过新建绑定解决缓存。

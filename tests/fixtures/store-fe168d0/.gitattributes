@@ -1,0 +1,2 @@
+# Preserve the frozen Git blob bytes for cross-platform SHA256 verification.
+* -text

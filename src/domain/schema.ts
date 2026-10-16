@@ -9,7 +9,10 @@ export const sourceRefSchema = z.object({
   id: idSchema, kind: z.enum(['turn', 'file', 'manual', 'overview']), label: shortText,
   timestamp: timestampSchema, excerpt: z.string().max(2000).optional(),
 }).strict();
-export const metadataSchema = z.object({ nextStep: z.string().max(2000).optional(), semanticKey: z.string().max(300).optional() })
+export const metadataSchema = z.object({ nextStep: z.string().max(2000).optional(), semanticKey: z.string().max(300).optional(),
+  relatedNodeIds: z.array(idSchema).max(100).optional(),
+  ideaPriority: z.enum(['high', 'normal', 'low']).optional(), ideaPinned: z.boolean().optional(),
+})
   .catchall(z.json()).refine(value => Object.keys(value).every(key => key.length <= 100), 'Metadata keys must be at most 100 characters')
   .refine(value => JSON.stringify(value).length <= 12000, 'Metadata must be at most 12000 characters');
 const evidenceSchema = z.array(sourceRefSchema).max(100);
@@ -29,6 +32,7 @@ export const operationSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('MOVE_NODE'), nodeId: idSchema, parentId: idSchema.nullable() }).strict(),
   z.object({ type: z.literal('PARK_NODE'), nodeId: idSchema, reason: shortText }).strict(),
   z.object({ type: z.literal('DROP_NODE'), nodeId: idSchema, reason: text.optional() }).strict(),
+  z.object({ type: z.literal('START_NODE'), nodeId: idSchema }).strict(),
   z.object({ type: z.literal('SET_ACTIVE_NODE'), nodeId: idSchema.nullable() }).strict(),
   z.object({ type: z.literal('ADD_DECISION'), decision: z.object({ id: idSchema, title: shortText, rationale: text.optional() }).strict() }).strict(),
   z.object({ type: z.literal('UPDATE_GOAL'), goal: text }).strict(),

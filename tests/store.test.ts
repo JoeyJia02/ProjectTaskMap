@@ -77,6 +77,39 @@ describe('incremental scenarios A–D', () => {
 });
 
 describe('consistency, receipts, audits and recovery', () => {
+  it('six failed approvals do not multiply pending reviews or partially modify the project', () => {
+    store.apply(owner, proposal([{ type: 'ADD_NODE', node: { id: 'existing', title: 'Existing task', summary: 'Saved' } }]));
+    const request = proposal([{ type: 'UPDATE_GOAL', goal: 'Must not leak' }, { type: 'ADD_NODE', node: { id: 'different-id', title: 'Existing task', summary: 'Replacement' } }]);
+    const pending = store.apply(owner, request);
+    const before = store.get(owner, projectId), history = store.history(owner, projectId);
+    for (let click = 0; click < 6; click++) {
+      expect(() => store.review(owner, projectId, pending.conflict!.id, 'approve', before.version)).toThrow(/未新增待审项/);
+      expect(store.conflicts(owner, projectId)).toHaveLength(1);
+      expect(store.get(owner, projectId)).toEqual(before);
+      expect(store.history(owner, projectId)).toEqual(history);
+    }
+    store.close(); store = new ProjectStore(path);
+    expect(() => store.review(owner, projectId, pending.conflict!.id, 'approve', before.version)).toThrow(/已有任务/);
+    expect(store.conflicts(owner, projectId)).toHaveLength(1);
+  });
+  it('archives only proven historical approval copies when the original is rejected', () => {
+    store.apply(owner, proposal([{ type: 'ADD_NODE', node: { id: 'existing', title: 'Existing' } }]));
+    const operations: ProjectStateDelta['operations'] = [{ type: 'ADD_NODE', node: { id: 'other-id', title: 'Existing', summary: 'Changed' } }];
+    const root = store.apply(owner, proposal(operations)).conflict!;
+    let parent = root;
+    for (let copy = 0; copy < 6; copy++) {
+      const key = `review:${parent.id}`;
+      parent = store.apply(owner, proposal(operations, { source: 'manual', idempotencyKey: key,
+        evidence: [{ id: key, kind: 'manual', label: 'Human approved proposal', timestamp: root.createdAt }] })).conflict!;
+    }
+    const independent = store.apply(owner, proposal(operations)).conflict!;
+    expect(store.conflicts(owner, projectId).filter(item => item.status === 'pending')).toHaveLength(8);
+    const before = store.get(owner, projectId);
+    store.review(owner, projectId, root.id, 'reject', before.version);
+    expect(store.get(owner, projectId)).toEqual(before);
+    expect(store.conflicts(owner, projectId).filter(item => item.status === 'pending').map(item => item.id)).toEqual([independent.id]);
+    expect(store.conflicts(owner, projectId)).toHaveLength(8);
+  });
   it('performs literally zero table writes for NO_OP and identical updates', () => {
     store.apply(owner, proposal([{ type: 'ADD_NODE', node: { id: 'a', title: 'A' } }]));
     const before = store.get(owner, projectId); const connection = new DatabaseSync(path);

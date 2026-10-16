@@ -18,4 +18,4 @@ export interface Conflict { id: string; projectId: string; kind: string; message
 export interface HistoryEntry { version: number; reason: string; createdAt: string }
 export interface MutationResult { outcome: 'applied' | 'no_op' | 'duplicate' | 'pending'; state: ProjectState; conflict?: Conflict }
 export interface HostContext { state?: ProjectState; bindingKey?: string; projectToken?: string; apiBaseUrl?: string; pendingDelta?: Delta }
-export interface HostAdapter { connect(onContext: (context: HostContext) => void): Promise<void>; sendRefresh(prompt: string): Promise<boolean>; close(): void }
+export interface HostAdapter { connect(onContext: (context: HostContext) => void): Promise<void>; sendRefresh(prompt: string): Promise<boolean>; canCallTools?: () => boolean; callTool?: (name: string, args: Record<string, unknown>) => Promise<unknown>; close(): void }

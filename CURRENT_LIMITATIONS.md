@@ -30,7 +30,7 @@
 
 ## 鉴权与接入运维
 
-个人 OAuth 使用 authorization code + PKCE S256 和 DCR，由 owner secret 保护授权流程。本版只有完整 read/write grant，单独请求只读 scope 会被拒绝；不提供独立只读 OAuth 身份。访问 token 有效期为 1 小时，没有 refresh token。临时 OAuth 注册/授权信息保存在内存中，进程重启可能需要重新连接；数据库中的绑定、任务、版本和审阅记录继续保留。请勿将此单用户实现当成已经审计的多租户身份平台。
+个人 OAuth 使用 authorization code + PKCE S256 和 DCR，由 owner secret 保护授权流程。本版只有完整 read/write grant，单独请求只读 scope 会被拒绝；不提供独立只读 OAuth 身份。访问 token 最长有效 1 小时；支持轮换 refresh token，单次授权绝对有效期 30 天，是否自动续期还取决于客户端。客户端注册与刷新授权持久保存，正常重启不会丢失；未完成的授权页意图与一次性 code 在重启后失效，需重新开始登录。刷新令牌仅存哈希，重放会撤销同一授权及其派生 UI/API 令牌；密钥或 issuer 改变需重新授权。请勿将此单用户实现当成已经审计的多租户身份平台。
 
 两份独立强密钥、真实公网 HTTPS origin、持久化数据库卷和精确 origin 配置由部署方提供。开发隧道用于联调；正式公开提交需要稳定域名与官方审核。当前没有声称完成生产部署、安全认证、性能容量认证或真实 ChatGPT 账号联调。[官方 MCP 部署要求](https://developers.openai.com/plugins/build/mcp-server)、[OAuth 要求](https://developers.openai.com/plugins/build/auth)
 
